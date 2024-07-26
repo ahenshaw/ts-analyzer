@@ -1,7 +1,7 @@
 //! Holds all the information regarding a given packet from the transport stream.
-pub mod payload;
-pub mod header;
 pub mod adaptation_field;
+pub mod header;
+pub mod payload;
 
 use crate::errors::invalid_payload_pointer::InvalidPayloadPointer;
 use crate::packet::adaptation_field::DataAdaptationField;
@@ -67,13 +67,13 @@ impl TSPacket {
             if length != 0 {
                 let af = DataAdaptationField::from_bytes(&mut buf[read_idx..buffer_length]);
 
-                read_idx += af.adaptation_field_length() as usize;
-    
+                read_idx += af.adaptation_field_length() as usize + 1;
+
                 // We currently do nothing with the adaptation extension field.
                 // TODO: Add support for adaptation extension field.
                 #[cfg(feature = "log")]
                 trace!("Packet has adaptation extension field {}", header);
-    
+
                 Some(AdaptationField::Data(af))
             } else {
                 let af = StuffingAdaptationField::new();
@@ -90,16 +90,22 @@ impl TSPacket {
             #[cfg(feature = "log")]
             trace!("Payload exists for TSPacket");
 
-            let payload_bytes: Box<[u8]> = Box::from(
-                BitVec::<u8, Msb0>::from_slice(&buf[read_idx..buf.len()]).as_raw_slice()
-            );
+            let payload_bytes: Box<[u8]> =
+                Box::from(BitVec::<u8, Msb0>::from_slice(&buf[read_idx..buf.len()]).as_raw_slice());
 
             let remainder = (PACKET_SIZE - read_idx) as u8;
             if header.pusi() && payload_bytes[0] > remainder {
-                return Err(Box::new(InvalidPayloadPointer { pointer: payload_bytes[0], remainder }))
+                return Err(Box::new(InvalidPayloadPointer {
+                    pointer: payload_bytes[0],
+                    remainder,
+                }));
             }
 
-            Some(TSPayload::from_bytes(header.pusi(), header.continuity_counter(), payload_bytes))
+            Some(TSPayload::from_bytes(
+                header.pusi(),
+                header.continuity_counter(),
+                payload_bytes,
+            ))
         } else {
             None
         };
@@ -164,15 +170,22 @@ mod tests {
             0x48, 0x14, 0xB1, 0xBA, 0x75, 0x10, 0x15, 0x9F, 0xB3, 0xD3, 0xD5, 0xBD, 0x90, 0x5A,
             0x7A, 0x7F, 0x2B, 0xC1, 0xF2, 0x5A, 0xFA, 0x49, 0x88, 0x08, 0x11, 0xE5, 0xC5, 0x67,
             0x18, 0x2A, 0x24, 0x2D, 0x60, 0xEB, 0x40, 0x28, 0xEC, 0x0A, 0x51, 0x0D, 0xA0, 0x55,
-            0xC2, 0x70, 0xB0, 0x44, 0x00, 0x3F
+            0xC2, 0x70, 0xB0, 0x44, 0x00, 0x3F,
         ];
-        return (Box::new(packet), crate::AdaptationFieldControl::AdaptationAndPayload);
+        return (
+            Box::new(packet),
+            crate::AdaptationFieldControl::AdaptationAndPayload,
+        );
     }
 
     #[test_case(packet_1)]
     fn from_bytes(p: fn() -> (Box<[u8]>, AdaptationFieldControl)) {
         let (mut buf, adaptation_field_control) = p();
         let packet = TSPacket::from_bytes(&mut buf).unwrap();
-        assert_eq!(packet.header().adaptation_field_control(), adaptation_field_control, "Transport Error Indicator is incorrect");
+        assert_eq!(
+            packet.header().adaptation_field_control(),
+            adaptation_field_control,
+            "Transport Error Indicator is incorrect"
+        );
     }
 }
